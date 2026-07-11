@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vocal phase space</title>
+<style>
+  :root
+  {
+    color-scheme: dark;
+  }
+
+  *
+  {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html, body
+  {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    color: #fff;
+    font-family: "Courier New", Courier, monospace;
+    overflow: hidden;
+  }
+
+  body.inverted
+  {
+    filter: invert(1);
+    background: #000;
+  }
+
+  #stage
+  {
+    position: fixed;
+    inset: 0;
+  }
+
+  canvas
+  {
+    display: block;
+  }
+
+  #ui
+  {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+    padding: 14px 18px;
+    pointer-events: none;
+    flex-wrap: wrap;
+  }
+
+  #title
+  {
+    font-size: 13px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  #hud
+  {
+    font-size: 13px;
+    opacity: 0.75;
+    white-space: nowrap;
+    min-width: 15ch;
+  }
+
+  #controls
+  {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    pointer-events: auto;
+  }
+
+  button
+  {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    background: transparent;
+    color: #fff;
+    border: 1px solid #fff;
+    border-radius: 0;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+
+  button:hover
+  {
+    background: #fff;
+    color: #000;
+  }
+
+  button:focus-visible
+  {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
+
+  button.active
+  {
+    background: #fff;
+    color: #000;
+  }
+
+  #sizeCtl
+  {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #fff;
+    padding: 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  #sizeCtl input[type="range"]
+  {
+    width: 90px;
+    accent-color: #fff;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  #hint
+  {
+    position: fixed;
+    bottom: 14px;
+    left: 18px;
+    font-size: 11px;
+    opacity: 0.5;
+    letter-spacing: 0.06em;
+    pointer-events: none;
+  }
+
+  #err
+  {
+    position: fixed;
+    bottom: 14px;
+    right: 18px;
+    font-size: 11px;
+    opacity: 0.8;
+    max-width: 42ch;
+    text-align: right;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="ui">
+  <div id="title">vocal phase space</div>
+  <div id="hud">0 s &nbsp;&bull;&nbsp; &mdash; Hz</div>
+  <div id="controls">
+    <button id="micBtn">start mic</button>
+    <button id="demoBtn">demo</button>
+    <button id="clearBtn">clear</button>
+    <button id="invBtn">invert</button>
+    <label id="sizeCtl"><span>size</span><input type="range" id="sizeSlider" min="0.015" max="0.16" step="0.005" value="0.055" aria-label="sphere size"></label>
+  </div>
+</div>
+
+<div id="hint">drag to rotate &nbsp;&bull;&nbsp; scroll to zoom &nbsp;&bull;&nbsp; hum, whistle, talk</div>
+<div id="err"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const X = { min: -2.5, max: 2.5 };
+const Y = { min: -1.0, max: 4.0 };
+const Z = { min: -2.0, max: 2.0 };
+
+const MAX_POINTS = 480;
+const SAMPLE_HZ = 30;
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 200);
+
+const TARGET = new THREE.Vector3(0, 1.4, 0);
+let az = 0.7, el = 0.28, dist = 11.5;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let userTouched = false;
+
+function updateCamera()
+{
+  camera.position.set(
+    TARGET.x + dist * Math.cos(el) * Math.sin(az),
+    TARGET.y + dist * Math.sin(el),
+    TARGET.z + dist * Math.cos(el) * Math.cos(az)
+  );
+  camera.lookAt(TARGET);
+}
+
+function buildGrid()
+{
+  const v = [];
+  const push = (a, b) => v.push(a.x, a.y, a.z, b.x, b.y, b.z);
+  const P = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  for (let x = X.min; x <= X.max + 1e-6; x += 1)
+  {
+    push(P(x, Y.min, Z.min), P(x, Y.min, Z.max));
+  }
+  for (let z = Z.min; z <= Z.max + 1e-6; z += 1)
+  {
+    push(P(X.min, Y.min, z), P(X.max, Y.min, z));
+  }
+  for (let x = X.min; x <= X.max + 1e-6; x += 1)
+  {
+    push(P(x, Y.min, Z.min), P(x, Y.max, Z.min));
+  }
+  for (let y = Y.min; y <= Y.max + 1e-6; y += 1)
+  {
+    push(P(X.min, y, Z.min), P(X.max, y, Z.min));
+  }
+  for (let z = Z.min; z <= Z.max + 1e-6; z += 1)
+  {
+    push(P(X.min, Y.min, z), P(X.min, Y.max, z));
+  }
+  for (let y = Y.min; y <= Y.max + 1e-6; y += 1)
+  {
+    push(P(X.min, y, Z.min), P(X.min, y, Z.max));
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  const m = new THREE.LineBasicMaterial({ color: 0x333333 });
+  scene.add(new THREE.LineSegments(g, m));
+
+  const zv = [];
+  zv.push(X.min, Y.min, 0, X.max, Y.min, 0);
+  zv.push(0, Y.min, Z.min, 0, Y.min, Z.max);
+  const zg = new THREE.BufferGeometry();
+  zg.setAttribute('position', new THREE.Float32BufferAttribute(zv, 3));
+  scene.add(new THREE.LineSegments(zg, new THREE.LineBasicMaterial({ color: 0x777777 })));
+}
+buildGrid();
+
+const LABEL_H = 26 / 90;
+
+function makeTextPlane(text, gray)
+{
+  const px = 64;
+  const canvas = document.createElement('canvas');
+  const font = 'bold ' + px + 'px "Courier New", Courier, monospace';
+  let ctx = canvas.getContext('2d');
+  ctx.font = font;
+  const w = Math.ceil(ctx.measureText(text).width) + 12;
+  canvas.width = w;
+  canvas.height = Math.ceil(px * 1.5);
+  ctx = canvas.getContext('2d');
+  ctx.font = font;
+  ctx.fillStyle = gray || '#aaaaaa';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const geo = new THREE.PlaneGeometry(LABEL_H * (canvas.width / canvas.height), LABEL_H);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  return new THREE.Mesh(geo, mat);
+}
+
+function addStaticLabel(text, x, y, z, rx, ry, rz, gray)
+{
+  const m = makeTextPlane(text, gray);
+  m.position.set(x, y, z);
+  m.rotation.set(rx, ry, rz);
+  scene.add(m);
+}
+
+const FLAT = -Math.PI / 2;
+addStaticLabel('Timbre', 0, Y.min + 0.01, Z.max + 0.7, FLAT, 0, 0, '#cccccc');
+addStaticLabel('Pitch', X.max + 0.95, Y.min + 0.01, 0, FLAT, 0, -Math.PI / 2, '#cccccc');
+addStaticLabel('Motion', X.min - 0.01, (Y.min + Y.max) / 2, Z.min + 0.6, 0, Math.PI / 2, Math.PI / 2, '#cccccc');
+
+for (let x = X.min + 0.5; x <= X.max; x += 1)
+{
+  addStaticLabel(String(x), x, Y.min + 0.01, Z.max + 0.3, FLAT, 0, 0);
+}
+for (let z = Z.min; z <= Z.max + 1e-6; z += 1)
+{
+  addStaticLabel(String(z), X.max + 0.4, Y.min + 0.01, z, FLAT, 0, -Math.PI / 2);
+}
+for (let y = 0; y <= Y.max + 1e-6; y += 1)
+{
+  addStaticLabel(String(y), X.min - 0.01, y, Z.min + 0.22, 0, Math.PI / 2, 0);
+}
+
+const points = [];
+
+const SAT = 2.6;
+function cubeColor(x, y, z)
+{
+  let r = (z - Z.min) / (Z.max - Z.min);
+  let g = (y - Y.min) / (Y.max - Y.min);
+  let b = (x - X.min) / (X.max - X.min);
+  const l = (r + g + b) / 3;
+  r = clamp(l + (r - l) * SAT, 0, 1);
+  g = clamp(l + (g - l) * SAT, 0, 1);
+  b = clamp(l + (b - l) * SAT, 0, 1);
+  const mx = Math.max(r, g, b);
+  if (mx > 0.02 && mx < 0.6)
+  {
+    const k = 0.6 / mx;
+    r *= k;
+    g *= k;
+    b *= k;
+  }
+  return [r, g, b];
+}
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.95);
+keyLight.position.set(5, 9, 7);
+scene.add(keyLight);
+
+let dotRadius = 0.055;
+
+const sphereGeo = new THREE.SphereGeometry(1, 14, 10);
+const sphereMat = new THREE.MeshPhongMaterial({
+  transparent: true,
+  opacity: 0.5,
+  depthWrite: false,
+  shininess: 130,
+  specular: 0xffffff
+});
+const spheres = new THREE.InstancedMesh(sphereGeo, sphereMat, MAX_POINTS);
+spheres.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+spheres.frustumCulled = false;
+spheres.count = 0;
+scene.add(spheres);
+
+const dummy = new THREE.Object3D();
+const tmpColor = new THREE.Color();
+
+const linePos = new Float32Array(MAX_POINTS * 2 * 3);
+const lineCol = new Float32Array(MAX_POINTS * 2 * 3);
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+lineGeo.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
+const lineMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85 });
+const trailLine = new THREE.LineSegments(lineGeo, lineMat);
+trailLine.frustumCulled = false;
+scene.add(trailLine);
+
+function rebuildTrail()
+{
+  const n = points.length;
+  for (let i = 0; i < n; i++)
+  {
+    const p = points[i];
+    const age = n > 1 ? i / (n - 1) : 1;
+    const fade = 0.30 + 0.70 * age;
+    const [r, g, b] = cubeColor(p.x, p.y, p.z);
+    dummy.position.set(p.x, p.y, p.z);
+    dummy.scale.setScalar(dotRadius);
+    dummy.updateMatrix();
+    spheres.setMatrixAt(i, dummy.matrix);
+    spheres.setColorAt(i, tmpColor.setRGB(r * fade, g * fade, b * fade));
+  }
+  spheres.count = n;
+  spheres.instanceMatrix.needsUpdate = true;
+  if (spheres.instanceColor)
+  {
+    spheres.instanceColor.needsUpdate = true;
+  }
+
+  let seg = 0;
+  for (let i = 1; i < n; i++)
+  {
+    const a = points[i - 1], b = points[i];
+    if (b.gap)
+    {
+      continue;
+    }
+    const fA = 0.22 + 0.6 * ((i - 1) / Math.max(1, n - 1));
+    const fB = 0.22 + 0.6 * (i / Math.max(1, n - 1));
+    const cA = cubeColor(a.x, a.y, a.z);
+    const cB = cubeColor(b.x, b.y, b.z);
+    linePos.set([a.x, a.y, a.z, b.x, b.y, b.z], seg * 6);
+    lineCol.set([cA[0] * fA, cA[1] * fA, cA[2] * fA, cB[0] * fB, cB[1] * fB, cB[2] * fB], seg * 6);
+    seg++;
+  }
+  lineGeo.setDrawRange(0, seg * 2);
+  lineGeo.attributes.position.needsUpdate = true;
+  lineGeo.attributes.color.needsUpdate = true;
+}
+
+function addPoint(x, y, z, gap)
+{
+  points.push({ x, y, z, gap });
+  if (points.length > MAX_POINTS)
+  {
+    points.shift();
+  }
+}
+
+const hud = document.getElementById('hud');
+const errBox = document.getElementById('err');
+
+let audioCtx = null, analyser = null, micStream = null;
+let timeBuf = null, freqBuf = null;
+let micOn = false, demoOn = false;
+let startTime = 0;
+
+let lastSampleT = 0;
+let prevSemi = null, prevSemiT = 0;
+let motionEMA = 0, timbreEMA = null, pitchEMA = null;
+let silentSince = 0, pendingGap = true;
+
+function semitones(hz)
+{
+  return 12 * Math.log2(hz / 220);
+}
+
+function detectPitch(buf, sr)
+{
+  const W = 1024;
+  let rms = 0;
+  for (let i = 0; i < W; i++)
+  {
+    rms += buf[i] * buf[i];
+  }
+  rms = Math.sqrt(rms / W);
+  if (rms < 0.008)
+  {
+    return { hz: 0, clarity: 0, rms };
+  }
+
+  const minLag = Math.floor(sr / 1100);
+  const maxLag = Math.floor(sr / 65);
+  let r0 = 0;
+  for (let i = 0; i < W; i++)
+  {
+    r0 += buf[i] * buf[i];
+  }
+
+  const r = new Float32Array(maxLag + 1);
+  let best = 0, bestLag = -1;
+  for (let lag = minLag; lag <= maxLag; lag++)
+  {
+    let s = 0;
+    for (let i = 0; i < W; i++)
+    {
+      s += buf[i] * buf[i + lag];
+    }
+    r[lag] = s / r0;
+    if (r[lag] > best)
+    {
+      best = r[lag];
+      bestLag = lag;
+    }
+  }
+  if (bestLag < 0 || best < 0.5)
+  {
+    return { hz: 0, clarity: best, rms };
+  }
+
+  let lag = bestLag;
+  for (let l = minLag; l <= maxLag; l++)
+  {
+    if (r[l] >= best * 0.92)
+    {
+      if (r[l] >= (r[l - 1] || 0) && r[l] >= (r[l + 1] || 0))
+      {
+        lag = l;
+        break;
+      }
+    }
+  }
+
+  const y1 = r[lag - 1] || 0, y2 = r[lag], y3 = r[lag + 1] || 0;
+  const denom = (y1 - 2 * y2 + y3);
+  const shift = denom !== 0 ? 0.5 * (y1 - y3) / denom : 0;
+  const hz = sr / (lag + shift);
+  return { hz, clarity: r[lag], rms };
+}
+
+function spectralCentroid(freq, sr, fftSize)
+{
+  const binHz = sr / fftSize;
+  const maxBin = Math.min(freq.length, Math.floor(8000 / binHz));
+  let num = 0, den = 0;
+  for (let i = 1; i < maxBin; i++)
+  {
+    const m = freq[i];
+    num += m * (i * binHz);
+    den += m;
+  }
+  return den > 0 ? num / den : 0;
+}
+
+async function startMic()
+{
+  try
+  {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+  }
+  catch (e)
+  {
+    errBox.textContent = 'mic blocked. allow microphone access, or open this file directly in your browser. demo mode still works.';
+    return;
+  }
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  await audioCtx.resume();
+  const src = audioCtx.createMediaStreamSource(micStream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.5;
+  src.connect(analyser);
+  timeBuf = new Float32Array(analyser.fftSize);
+  freqBuf = new Uint8Array(analyser.frequencyBinCount);
+  micOn = true;
+  demoOn = false;
+  startTime = performance.now();
+  prevSemi = null;
+  pendingGap = true;
+  errBox.textContent = '';
+  syncButtons();
+}
+
+function stopMic()
+{
+  if (micStream)
+  {
+    micStream.getTracks().forEach(t => t.stop());
+  }
+  micStream = null;
+  micOn = false;
+  syncButtons();
+}
+
+const demo = { hz: 220, target: 220, nextChange: 0, phraseEnd: 0, resting: false, restEnd: 0 };
+
+function demoSample(now, dt)
+{
+  if (demo.resting)
+  {
+    if (now > demo.restEnd)
+    {
+      demo.resting = false;
+      demo.phraseEnd = now + 1200 + Math.random() * 2500;
+      demo.hz = 130 + Math.random() * 250;
+      demo.target = demo.hz;
+      demo.nextChange = 0;
+    }
+    return { hz: 0, clarity: 0, rms: 0, centroid: 0 };
+  }
+  if (now > demo.phraseEnd)
+  {
+    demo.resting = true;
+    demo.restEnd = now + 300 + Math.random() * 900;
+    return { hz: 0, clarity: 0, rms: 0, centroid: 0 };
+  }
+  if (now > demo.nextChange)
+  {
+    const jump = Math.random() < 0.25 ? 12 : 5;
+    demo.target = Math.min(900, Math.max(90, demo.hz * Math.pow(2, (Math.random() * 2 - 1) * jump / 12)));
+    demo.nextChange = now + 120 + Math.random() * 380;
+  }
+  const k = 1 - Math.exp(-dt * 9);
+  demo.hz += (demo.target - demo.hz) * k;
+  const vib = 1 + 0.006 * Math.sin(now * 0.033);
+  const hz = demo.hz * vib;
+  const centroid = 900 + hz * 2.2 + 500 * Math.sin(now * 0.0011);
+  const rms = 0.03 + 0.025 * Math.sin(now * 0.004) + Math.random() * 0.008;
+  return { hz, clarity: 1, rms: Math.abs(rms), centroid };
+}
+
+function sampleAudio(now)
+{
+  if (now - lastSampleT < 1000 / SAMPLE_HZ)
+  {
+    return;
+  }
+  const dt = Math.min(0.2, (now - lastSampleT) / 1000) || (1 / SAMPLE_HZ);
+  lastSampleT = now;
+
+  let hz = 0, clarity = 0, rms = 0, centroid = 0;
+
+  if (micOn && analyser)
+  {
+    analyser.getFloatTimeDomainData(timeBuf);
+    analyser.getByteFrequencyData(freqBuf);
+    const p = detectPitch(timeBuf, audioCtx.sampleRate);
+    hz = p.hz;
+    clarity = p.clarity;
+    rms = p.rms;
+    centroid = spectralCentroid(freqBuf, audioCtx.sampleRate, analyser.fftSize);
+  }
+  else if (demoOn)
+  {
+    const d = demoSample(now, dt);
+    hz = d.hz;
+    clarity = d.clarity;
+    rms = d.rms;
+    centroid = d.centroid;
+  }
+  else
+  {
+    return;
+  }
+
+  const t = ((now - startTime) / 1000);
+  const voiced = hz > 0 && clarity > 0.6 && rms > 0.008;
+
+  if (!voiced)
+  {
+    if (!silentSince)
+    {
+      silentSince = now;
+    }
+    if (now - silentSince > 120)
+    {
+      pendingGap = true;
+      prevSemi = null;
+      motionEMA = 0;
+    }
+    hud.textContent = t.toFixed(0) + ' s \u00A0\u2022\u00A0 \u2014 Hz';
+    return;
+  }
+  silentSince = 0;
+
+  const st = semitones(hz);
+  pitchEMA = (pitchEMA === null || pendingGap) ? st : pitchEMA + 0.5 * (st - pitchEMA);
+
+  let rate = 0;
+  if (prevSemi !== null)
+  {
+    rate = Math.abs(pitchEMA - prevSemi) / Math.max(1e-3, (now - prevSemiT) / 1000);
+  }
+  prevSemi = pitchEMA;
+  prevSemiT = now;
+  motionEMA += 0.35 * (rate - motionEMA);
+
+  timbreEMA = (timbreEMA === null || pendingGap) ? centroid : timbreEMA + 0.4 * (centroid - timbreEMA);
+
+  const zPitch = clamp(pitchEMA / 12, Z.min, Z.max);
+  const yMotion = clamp(Math.log1p(motionEMA) / Math.log1p(120), 0, 1) * 3.5;
+  const xTimbre = clamp(Math.log2(Math.max(200, timbreEMA) / 1500) * 1.5, X.min, X.max);
+
+  addPoint(xTimbre, yMotion, zPitch, pendingGap);
+  pendingGap = false;
+
+  hud.textContent = t.toFixed(0) + ' s \u00A0\u2022\u00A0 ' + hz.toFixed(1) + ' Hz';
+}
+
+function clamp(v, a, b)
+{
+  return Math.min(b, Math.max(a, v));
+}
+
+const micBtn = document.getElementById('micBtn');
+const demoBtn = document.getElementById('demoBtn');
+const clearBtn = document.getElementById('clearBtn');
+const invBtn = document.getElementById('invBtn');
+
+function syncButtons()
+{
+  micBtn.textContent = micOn ? 'mic on' : 'start mic';
+  micBtn.classList.toggle('active', micOn);
+  demoBtn.classList.toggle('active', demoOn);
+}
+
+micBtn.addEventListener('click', () =>
+{
+  micOn ? stopMic() : startMic();
+});
+
+demoBtn.addEventListener('click', () =>
+{
+  demoOn = !demoOn;
+  if (demoOn)
+  {
+    if (micOn)
+    {
+      stopMic();
+    }
+    startTime = performance.now();
+    prevSemi = null;
+    pendingGap = true;
+  }
+  syncButtons();
+});
+
+clearBtn.addEventListener('click', () =>
+{
+  points.length = 0;
+  prevSemi = null;
+  pendingGap = true;
+  rebuildTrail();
+});
+
+invBtn.addEventListener('click', () =>
+{
+  document.body.classList.toggle('inverted');
+});
+
+document.getElementById('sizeSlider').addEventListener('input', e =>
+{
+  dotRadius = parseFloat(e.target.value);
+});
+
+let dragging = false, lastX = 0, lastY = 0;
+const cvs = renderer.domElement;
+
+cvs.addEventListener('pointerdown', e =>
+{
+  dragging = true;
+  userTouched = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  cvs.setPointerCapture(e.pointerId);
+});
+
+cvs.addEventListener('pointermove', e =>
+{
+  if (!dragging)
+  {
+    return;
+  }
+  az -= (e.clientX - lastX) * 0.005;
+  el = clamp(el + (e.clientY - lastY) * 0.005, -1.2, 1.45);
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
+
+cvs.addEventListener('pointerup', () =>
+{
+  dragging = false;
+});
+
+cvs.addEventListener('wheel', e =>
+{
+  e.preventDefault();
+  dist = clamp(dist * (1 + e.deltaY * 0.001), 4.5, 26);
+}, { passive: false });
+
+addEventListener('resize', () =>
+{
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+function loop(now)
+{
+  requestAnimationFrame(loop);
+  if (!userTouched && !reducedMotion)
+  {
+    az += 0.0009;
+  }
+  sampleAudio(now);
+  rebuildTrail();
+  updateCamera();
+  renderer.render(scene, camera);
+}
+updateCamera();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
